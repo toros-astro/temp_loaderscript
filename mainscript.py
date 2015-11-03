@@ -107,98 +107,97 @@ if __name__ == "__main__":
 
     #Check if files on folder
     todayspath = os.path.join(DATA_ROOT, todaysfolder)
-    if os.path.exists(todayspath):
-
-        #Gather all FITS files into a list to be iterated over
-        allfitsfiles = [os.path.join(root, afile) for root, dirs, files \
-                in os.walk(todayspath) for afile in files if '.fit' in afile]
-        rawpath = os.path.join(todayspath, 'raw')
-        try:
-            if not os.path.exists(rawpath):
-                os.mkdir(rawpath)
-        except:
-            logger.error("Can't create dir %s. Exiting." % (rawpath))
-            sys.exit(2)
-        for afile in allfitsfiles:
-            #logger.info("Moving file %s to raw folder" % \
-            #    (os.path.basename(afile)))
-            try:git sasfdadfsdfa
-                os.rename(afile, os.path.join(rawpath, \
-                    os.path.basename(afile)))
-            except:
-                logger.error("Couldn't move file %s to raw folder." % \
-                    (todayspath))
-            #Enter here file to database
-
-        #Reduce each file
-        from image_collection import ImageFileCollection
-
-        #Create an image file collection storing the following keys
-        keys = ['imagetyp', 'object', 'filter', 'exptime']
-        allfits = ImageFileCollection(rawpath, keywords=keys)
-
-        #Collect all dark files and make a dark frame for each different exposure time
-        dark_matches = np.ma.array(['dark' in atype.lower() for atype in allfits.summary['imagetyp']])
-        darkexp_set = set(allfits.summary['exptime'][dark_matches])
-        darklists = {}
-        for anexp in darkexp_set:
-            my_darks = allfits.summary['file'][(allfits.summary['exptime'] == anexp) & dark_matches]
-            my_darks = [os.path.join(rawpath, adark) for adark in my_darks]
-            darklists[anexp] = combineDarks(my_darks)
-
-        #Collect all science files
-        sciencelist = allfits.files_filtered(imagetyp='light')
-        sciencelist = [os.path.join(rawpath, afile) for afile in sciencelist]
-
-        #Collect all bias files
-        bias_matches = np.ma.array([('zero' in typ.lower() or 'bias' \
-            in typ.lower()) for typ in allfits.summary['imagetyp']])
-        biaslist = allfits.summary['file'][bias_matches]
-        biaslist = [os.path.join(rawpath, afile) for afile in biaslist]
-        biasmaster = combineBias(biaslist)
-
-        #Create the flat master
-        flatlist = allfits.files_filtered(imagetyp='flat')
-        flatlist = [os.path.join(rawpath, aflat) for aflat in flatlist]
-        exptime = fits.getval(flatlist[0], 'exptime')
-        darkmaster = chooseClosestDark(darklists, exptime)
-        flatmaster = combineFlats(flatlist, dark=darkmaster)
-
-        preprocessedpath = os.path.join(todayspath, 'preprocessed')
-        try:
-            if not os.path.exists(preprocessedpath):
-                os.mkdir(preprocessedpath)
-        except:
-            logger.error("Can't create dir %s. Exiting." % (preprocessedpath))
-            sys.exit(2)
-
-        #Save calibration master files
-        for adarkexp in darkexp_set:
-            outpath = os.path.join(preprocessedpath, \
-                                    'dark_master_' + str(adarkexp) + 's.fits')
-            saveCCDDataAndLog(outpath, darkmaster)
-        outpath = os.path.join(preprocessedpath, 'bias_master.fits')
-        saveCCDDataAndLog(outpath, biasmaster)
-        outpath = os.path.join(preprocessedpath, 'flat_master.fits')
-        saveCCDDataAndLog(outpath, flatmaster)
-
-        for ascience in sciencelist:
-            try:
-                sci_image = ccdproc.CCDData.read(ascience, unit='adu')
-                exp_time = fits.getval(ascience, 'exptime')
-                darkmaster = chooseClosestDark(darklists, exp_time)
-                sci_darksub = ccdproc.subtract_dark(sci_image, darkmaster, \
-                    exposure_time='exptime', exposure_unit=u.second)
-                sci_flatcorrected = ccdproc.flat_correct(sci_darksub, flatmaster)
-            except:
-                logger.error("Couldn't reduce image %s." % (ascience))
-                continue
-            outpath = os.path.join(preprocessedpath, \
-                     'preprocessed_' + os.path.basename(ascience))
-            saveCCDDataAndLog(outpath, sci_flatcorrected)
-
-    else: #if os.path.exists(todayspath) failed
+    if not os.path.exists(todayspath):
         logger.error("Folder %s not found. Ending script." % (todayspath))
         sys.exit(2)
 
+    #Gather all FITS files into a list to be iterated over
+    allfitsfiles = [os.path.join(root, afile) for root, dirs, files \
+            in os.walk(todayspath) for afile in files if '.fit' in afile]
+    rawpath = os.path.join(todayspath, '01_raw')
+    try:
+        if not os.path.exists(rawpath):
+            os.mkdir(rawpath)
+    except:
+        logger.error("Can't create dir %s. Exiting." % (rawpath))
+        sys.exit(2)
+    for afile in allfitsfiles:
+        #logger.info("Moving file %s to raw folder" % \
+        #    (os.path.basename(afile)))
+        try:git sasfdadfsdfa
+            os.rename(afile, os.path.join(rawpath, \
+                os.path.basename(afile)))
+        except:
+            logger.error("Couldn't move file %s to raw folder." % \
+                (todayspath))
+        #Enter here file to database
+
+    #Reduce each file
+    from image_collection import ImageFileCollection
+
+    #Create an image file collection storing the following keys
+    keys = ['imagetyp', 'object', 'filter', 'exptime']
+    allfits = ImageFileCollection(rawpath, keywords=keys)
+
+    #Collect all dark files and make a dark frame for each diff exposure time
+    dark_matches = np.ma.array(['dark' in atype.lower() \
+                                   for atype in allfits.summary['imagetyp']])
+    darkexp_set = set(allfits.summary['exptime'][dark_matches])
+    darklists = {}
+    for anexp in darkexp_set:
+        my_darks = allfits.summary['file'][(\
+                       allfits.summary['exptime'] == anexp) & dark_matches]
+        my_darks = [os.path.join(rawpath, adark) for adark in my_darks]
+        darklists[anexp] = combineDarks(my_darks)
+
+    #Collect all science files
+    sciencelist = allfits.files_filtered(imagetyp='light')
+    sciencelist = [os.path.join(rawpath, afile) for afile in sciencelist]
+
+    #Collect all bias files
+    bias_matches = np.ma.array([('zero' in typ.lower() or 'bias' \
+        in typ.lower()) for typ in allfits.summary['imagetyp']])
+    biaslist = allfits.summary['file'][bias_matches]
+    biaslist = [os.path.join(rawpath, afile) for afile in biaslist]
+    biasmaster = combineBias(biaslist)
+
+    #Create the flat master
+    flatlist = allfits.files_filtered(imagetyp='flat')
+    flatlist = [os.path.join(rawpath, aflat) for aflat in flatlist]
+    exptime = fits.getval(flatlist[0], 'exptime')
+    darkmaster = chooseClosestDark(darklists, exptime)
+    flatmaster = combineFlats(flatlist, dark=darkmaster)
+
+    preprocessedpath = os.path.join(todayspath, '02_preprocessed')
+    try:
+        if not os.path.exists(preprocessedpath):
+            os.mkdir(preprocessedpath)
+    except:
+        logger.error("Can't create dir %s. Exiting." % (preprocessedpath))
+        sys.exit(2)
+
+    #Save calibration master files
+    for adarkexp in darkexp_set:
+        outpath = os.path.join(preprocessedpath, \
+                                'dark_master_' + str(adarkexp) + 's.fits')
+        saveCCDDataAndLog(outpath, darkmaster)
+    outpath = os.path.join(preprocessedpath, 'bias_master.fits')
+    saveCCDDataAndLog(outpath, biasmaster)
+    outpath = os.path.join(preprocessedpath, 'flat_master.fits')
+    saveCCDDataAndLog(outpath, flatmaster)
+
+    for ascience in sciencelist:
+        try:
+            sci_image = ccdproc.CCDData.read(ascience, unit='adu')
+            exp_time = fits.getval(ascience, 'exptime')
+            darkmaster = chooseClosestDark(darklists, exp_time)
+            sci_darksub = ccdproc.subtract_dark(sci_image, darkmaster, \
+                exposure_time='exptime', exposure_unit=u.second)
+            sci_flatcorrected = ccdproc.flat_correct(sci_darksub, flatmaster)
+        except:
+            logger.error("Couldn't reduce image %s." % (ascience))
+            continue
+        outpath = os.path.join(preprocessedpath, \
+                 'preprocessed_' + os.path.basename(ascience))
+        saveCCDDataAndLog(outpath, sci_flatcorrected)
 
