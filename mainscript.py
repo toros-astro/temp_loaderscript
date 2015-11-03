@@ -52,7 +52,8 @@ def combineBias(biaslist):
 
 def combineDarks(darklist):
     """Combine all the dark files into a master dark"""
-    darkComb = ccdproc.Combiner([ccdproc.CCDData.read(adark, unit="adu") for adark in darklist])
+    darkComb = ccdproc.Combiner([ccdproc.CCDData.read(adark, unit="adu") \
+        for adark in darklist])
     darkComb.sigma_clipping(low_thresh=3, high_thresh=3, func=np.ma.median)
     darkmaster = darkComb.average_combine()
     darkmaster.header['exptime'] = fits.getval(darklist[0], 'exptime')
@@ -63,7 +64,8 @@ def combineFlats(flatlist, dark=None, bias=None):
     """Combine all flat files into a flat master. Subtract dark or bias if provided."""
     ccdflatlist = [ccdproc.CCDData.read(aflat, unit="adu") for aflat in flatlist]
     if dark is not None and bias is None:
-        flat_sub = [ccdproc.subtract_dark(aflat, dark, exposure_time='exptime', exposure_unit=u.second) for aflat in ccdflatlist]
+        flat_sub = [ccdproc.subtract_dark(aflat, dark, exposure_time='exptime',\
+            exposure_unit=u.second) for aflat in ccdflatlist]
     elif dark is None and bias is not None:
         flat_sub = [ccdproc.subtract_bias(aflat, bias) for aflat in ccdflatlist]
     else:
@@ -76,13 +78,21 @@ def combineFlats(flatlist, dark=None, bias=None):
     return flatmaster
 
 
+def saveCCDDataAndLog(outpath, calibfile):
+    logger = logging.getLogger('loaderscript')
+    try:
+        calibfile.to_hdu().writeto(outpath, clobber=True)
+        logger.info("Writing image to file: %s." % (outpath))
+    except:
+        logger.error("Error writing calibration image to file: %s." %(outpath))
+
+
 if __name__ == "__main__":
     import sys
     import argparse
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--dir", help="Input the directory to be processed.", \
-                                                                    type=str)
+    parser.add_argument("--dir", help="Input the directory to be processed.")
     args = parser.parse_args()
 
     timestamp = time.strftime("%Y%m%d_%H%M%S")
@@ -104,14 +114,15 @@ if __name__ == "__main__":
                 in os.walk(todayspath) for afile in files if '.fit' in afile]
         rawpath = os.path.join(todayspath, 'raw')
         try:
-            os.mkdir(rawpath)
+            if not os.path.exists(rawpath):
+                os.mkdir(rawpath)
         except:
-            logger.error("Can't create path %s. Exiting." % (rawpath))
+            logger.error("Can't create dir %s. Exiting." % (rawpath))
             sys.exit(2)
         for afile in allfitsfiles:
-            logger.info("Moving file %s to raw folder" % \
-                (os.path.basename(afile)))
-            try:
+            #logger.info("Moving file %s to raw folder" % \
+            #    (os.path.basename(afile)))
+            try:git sasfdadfsdfa
                 os.rename(afile, os.path.join(rawpath, \
                     os.path.basename(afile)))
             except:
@@ -127,7 +138,7 @@ if __name__ == "__main__":
         allfits = ImageFileCollection(rawpath, keywords=keys)
 
         #Collect all dark files and make a dark frame for each different exposure time
-        dark_matches = np.ma.array(['dark' in typ.lower() for typ in allfits.summary['imagetyp']])
+        dark_matches = np.ma.array(['dark' in atype.lower() for atype in allfits.summary['imagetyp']])
         darkexp_set = set(allfits.summary['exptime'][dark_matches])
         darklists = {}
         for anexp in darkexp_set:
@@ -135,14 +146,16 @@ if __name__ == "__main__":
             my_darks = [os.path.join(rawpath, adark) for adark in my_darks]
             darklists[anexp] = combineDarks(my_darks)
 
-
         #Collect all science files
         sciencelist = allfits.files_filtered(imagetyp='light')
         sciencelist = [os.path.join(rawpath, afile) for afile in sciencelist]
 
         #Collect all bias files
-        #bias_matches = ([('zero' in typ.lower() or 'bias' in typ.lower()) for typ in allfits.summary['imagetyp']]
-        #biaslist = allfits.summary['file'][bias_matches]
+        bias_matches = np.ma.array([('zero' in typ.lower() or 'bias' \
+            in typ.lower()) for typ in allfits.summary['imagetyp']])
+        biaslist = allfits.summary['file'][bias_matches]
+        biaslist = [os.path.join(rawpath, afile) for afile in biaslist]
+        biasmaster = combineBias(biaslist)
 
         #Create the flat master
         flatlist = allfits.files_filtered(imagetyp='flat')
@@ -153,32 +166,36 @@ if __name__ == "__main__":
 
         preprocessedpath = os.path.join(todayspath, 'preprocessed')
         try:
-            os.mkdir(preprocessedpath)
+            if not os.path.exists(preprocessedpath):
+                os.mkdir(preprocessedpath)
         except:
-            logger.error("Can't create path %s. Exiting." % (preprocessedpath))
+            logger.error("Can't create dir %s. Exiting." % (preprocessedpath))
             sys.exit(2)
+
+        #Save calibration master files
+        for adarkexp in darkexp_set:
+            outpath = os.path.join(preprocessedpath, \
+                                    'dark_master_' + str(adarkexp) + 's.fits')
+            saveCCDDataAndLog(outpath, darkmaster)
+        outpath = os.path.join(preprocessedpath, 'bias_master.fits')
+        saveCCDDataAndLog(outpath, biasmaster)
+        outpath = os.path.join(preprocessedpath, 'flat_master.fits')
+        saveCCDDataAndLog(outpath, flatmaster)
 
         for ascience in sciencelist:
             try:
                 sci_image = ccdproc.CCDData.read(ascience, unit='adu')
                 exp_time = fits.getval(ascience, 'exptime')
                 darkmaster = chooseClosestDark(darklists, exp_time)
-                sci_darksub = ccdproc.subtract_dark(sci_image, darkmaster, exposure_time='exptime', exposure_unit=u.second)
+                sci_darksub = ccdproc.subtract_dark(sci_image, darkmaster, \
+                    exposure_time='exptime', exposure_unit=u.second)
                 sci_flatcorrected = ccdproc.flat_correct(sci_darksub, flatmaster)
             except:
                 logger.error("Couldn't reduce image %s." % (ascience))
                 continue
-            try:
-                outpath = os.path.join(preprocessedpath, \
-                    'reduced_' + os.path.basename(ascience))
-                hdulist = sci_flatcorrected.to_hdu()
-                hdulist.writeto(outpath, clobber=True)
-            except:
-                logger.error("Error writing reduced image to file: %s." % \
-                    (outpath))
-                continue
-
-
+            outpath = os.path.join(preprocessedpath, \
+                     'preprocessed_' + os.path.basename(ascience))
+            saveCCDDataAndLog(outpath, sci_flatcorrected)
 
     else: #if os.path.exists(todayspath) failed
         logger.error("Folder %s not found. Ending script." % (todayspath))
