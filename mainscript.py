@@ -6,6 +6,12 @@ TODO: DOCS
 import time
 import os
 import logging
+import ccdproc
+import numpy as np
+from astropy.io import fits
+from astropy import units as u
+
+DATA_ROOT = "/Users/utb/Desktop/dataToTestPipeline/observations"
 
 def startLogger(loggerName, logFilename):
     # create logger
@@ -27,6 +33,49 @@ def startLogger(loggerName, logFilename):
     logger.addHandler(ch)
 
 
+def chooseClosestDark(darklists, exptime):
+    best_t = np.inf
+    for anexp in darklists.iterkeys():
+        if abs(anexp - exptime) < best_t:
+            best_t = anexp
+    return darklists[best_t]
+
+
+def combineBias(biaslist):
+    """Combine all the bias files into a master bias"""
+    ccdlist = [ccdproc.CCDData.read(abias, unit="adu") for abias in biaslist]
+    biasComb = ccdproc.Combiner(ccdlist)
+    biasComb.sigma_clipping(low_thresh=3, high_thresh=3, func=np.ma.median)
+    biasmaster = biasComb.average_combine()
+    return biasmaster
+
+
+def combineDarks(darklist):
+    """Combine all the dark files into a master dark"""
+    darkComb = ccdproc.Combiner([ccdproc.CCDData.read(adark, unit="adu") for adark in darklist])
+    darkComb.sigma_clipping(low_thresh=3, high_thresh=3, func=np.ma.median)
+    darkmaster = darkComb.average_combine()
+    darkmaster.header['exptime'] = fits.getval(darklist[0], 'exptime')
+    return darkmaster
+
+
+def combineFlats(flatlist, dark=None, bias=None):
+    """Combine all flat files into a flat master. Subtract dark or bias if provided."""
+    ccdflatlist = [ccdproc.CCDData.read(aflat, unit="adu") for aflat in flatlist]
+    if dark is not None and bias is None:
+        flat_sub = [ccdproc.subtract_dark(aflat, dark, exposure_time='exptime', exposure_unit=u.second) for aflat in ccdflatlist]
+    elif dark is None and bias is not None:
+        flat_sub = [ccdproc.subtract_bias(aflat, bias) for aflat in ccdflatlist]
+    else:
+        flat_sub = ccdflatlist
+
+    flatComb = ccdproc.Combiner(flat_sub)
+    flatComb.sigma_clipping(low_thresh=3, high_thresh=3, func=np.ma.median)
+    flatComb.scaling = lambda arr: 1./np.ma.average(arr)
+    flatmaster = flatComb.average_combine()
+    return flatmaster
+
+
 if __name__ == "__main__":
     import sys
     import argparse
@@ -40,23 +89,25 @@ if __name__ == "__main__":
     startLogger("loaderscript", 'mainscript_' + timestamp + '.log')
     logger = logging.getLogger('loaderscript')
 
-    dataRootFolder = "/Users/utb/Desktop/dataToTestPipeline/observations"
     if args.dir is None:
         #todaysfolder = time.strftime("%Y%m%d")
-        
+        todaysfolder = "20150916"
     else:
-        todaysfolder = args.dir #"20151027"
+        todaysfolder = args.dir
 
     #Check if files on folder
-    todayspath = os.path.join(dataRootFolder, todaysfolder)
+    todayspath = os.path.join(DATA_ROOT, todaysfolder)
     if os.path.exists(todayspath):
 
         #Gather all FITS files into a list to be iterated over
         allfitsfiles = [os.path.join(root, afile) for root, dirs, files \
                 in os.walk(todayspath) for afile in files if '.fit' in afile]
-
-        rawpath = os.path.join(todaysfolder, 'raw')      
-        os.mkdir(rawpath)
+        rawpath = os.path.join(todayspath, 'raw')
+        try:
+            os.mkdir(rawpath)
+        except:
+            logger.error("Can't create path %s. Exiting." % (rawpath))
+            sys.exit(2)
         for afile in allfitsfiles:
             logger.info("Moving file %s to raw folder" % \
                 (os.path.basename(afile)))
@@ -66,17 +117,70 @@ if __name__ == "__main__":
             except:
                 logger.error("Couldn't move file %s to raw folder." % \
                     (todayspath))
-
             #Enter here file to database
 
         #Reduce each file
-        # *Create master dark or bias frames
-        # *Create master flat frame
-        # *Enter both masters and individual files into database
-        # *Do the processing
-        # *Enter the data into the database
+        from image_collection import ImageFileCollection
 
-    else:
+        #Create an image file collection storing the following keys
+        keys = ['imagetyp', 'object', 'filter', 'exptime']
+        allfits = ImageFileCollection(rawpath, keywords=keys)
+
+        #Collect all dark files and make a dark frame for each different exposure time
+        dark_matches = np.ma.array(['dark' in typ.lower() for typ in allfits.summary['imagetyp']])
+        darkexp_set = set(allfits.summary['exptime'][dark_matches])
+        darklists = {}
+        for anexp in darkexp_set:
+            my_darks = allfits.summary['file'][(allfits.summary['exptime'] == anexp) & dark_matches]
+            my_darks = [os.path.join(rawpath, adark) for adark in my_darks]
+            darklists[anexp] = combineDarks(my_darks)
+
+
+        #Collect all science files
+        sciencelist = allfits.files_filtered(imagetyp='light')
+        sciencelist = [os.path.join(rawpath, afile) for afile in sciencelist]
+
+        #Collect all bias files
+        #bias_matches = ([('zero' in typ.lower() or 'bias' in typ.lower()) for typ in allfits.summary['imagetyp']]
+        #biaslist = allfits.summary['file'][bias_matches]
+
+        #Create the flat master
+        flatlist = allfits.files_filtered(imagetyp='flat')
+        flatlist = [os.path.join(rawpath, aflat) for aflat in flatlist]
+        exptime = fits.getval(flatlist[0], 'exptime')
+        darkmaster = chooseClosestDark(darklists, exptime)
+        flatmaster = combineFlats(flatlist, dark=darkmaster)
+
+        preprocessedpath = os.path.join(todayspath, 'preprocessed')
+        try:
+            os.mkdir(preprocessedpath)
+        except:
+            logger.error("Can't create path %s. Exiting." % (preprocessedpath))
+            sys.exit(2)
+
+        for ascience in sciencelist:
+            try:
+                sci_image = ccdproc.CCDData.read(ascience, unit='adu')
+                exp_time = fits.getval(ascience, 'exptime')
+                darkmaster = chooseClosestDark(darklists, exp_time)
+                sci_darksub = ccdproc.subtract_dark(sci_image, darkmaster, exposure_time='exptime', exposure_unit=u.second)
+                sci_flatcorrected = ccdproc.flat_correct(sci_darksub, flatmaster)
+            except:
+                logger.error("Couldn't reduce image %s." % (ascience))
+                continue
+            try:
+                outpath = os.path.join(preprocessedpath, \
+                    'reduced_' + os.path.basename(ascience))
+                hdulist = sci_flatcorrected.to_hdu()
+                hdulist.writeto(outpath, clobber=True)
+            except:
+                logger.error("Error writing reduced image to file: %s." % \
+                    (outpath))
+                continue
+
+
+
+    else: #if os.path.exists(todayspath) failed
         logger.error("Folder %s not found. Ending script." % (todayspath))
         sys.exit(2)
 
