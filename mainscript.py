@@ -13,6 +13,7 @@ from astropy import units as u
 
 DATA_ROOT = "/Users/utb/Desktop/dataToTestPipeline/observations"
 
+
 def startLogger(loggerName, logFilename):
     # create logger
     logger = logging.getLogger(loggerName)
@@ -91,8 +92,11 @@ if __name__ == "__main__":
     import sys
     import argparse
 
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser("Script to preprocess astrononomical images.")
     parser.add_argument("--dir", help="Input the directory to be processed.")
+    parser.add_argument("--usebias", action='store_true', 
+        help="Use bias frames instead of darks in reduction.",
+        default=False)
     args = parser.parse_args()
 
     timestamp = time.strftime("%Y%m%d_%H%M%S")
@@ -124,7 +128,7 @@ if __name__ == "__main__":
     for afile in allfitsfiles:
         #logger.info("Moving file %s to raw folder" % \
         #    (os.path.basename(afile)))
-        try:git sasfdadfsdfa
+        try:
             os.rename(afile, os.path.join(rawpath, \
                 os.path.basename(afile)))
         except:
@@ -164,9 +168,12 @@ if __name__ == "__main__":
     #Create the flat master
     flatlist = allfits.files_filtered(imagetyp='flat')
     flatlist = [os.path.join(rawpath, aflat) for aflat in flatlist]
-    exptime = fits.getval(flatlist[0], 'exptime')
-    darkmaster = chooseClosestDark(darklists, exptime)
-    flatmaster = combineFlats(flatlist, dark=darkmaster)
+    if args.usebias:
+        flatmaster = combineFlats(flatlist, bias=biasmaster)
+    else:
+        exptime = fits.getval(flatlist[0], 'exptime')
+        darkmaster = chooseClosestDark(darklists, exptime)
+        flatmaster = combineFlats(flatlist, dark=darkmaster)
 
     preprocessedpath = os.path.join(todayspath, '02_preprocessed')
     try:
@@ -177,23 +184,29 @@ if __name__ == "__main__":
         sys.exit(2)
 
     #Save calibration master files
-    for adarkexp in darkexp_set:
-        outpath = os.path.join(preprocessedpath, \
+    if args.usebias:
+        outpath = os.path.join(preprocessedpath, 'bias_master.fits')
+        saveCCDDataAndLog(outpath, biasmaster)
+    else:
+        for adarkexp in darkexp_set:
+            outpath = os.path.join(preprocessedpath, \
                                 'dark_master_' + str(adarkexp) + 's.fits')
-        saveCCDDataAndLog(outpath, darkmaster)
-    outpath = os.path.join(preprocessedpath, 'bias_master.fits')
-    saveCCDDataAndLog(outpath, biasmaster)
+            saveCCDDataAndLog(outpath, darklists[adarkexp])
     outpath = os.path.join(preprocessedpath, 'flat_master.fits')
     saveCCDDataAndLog(outpath, flatmaster)
 
     for ascience in sciencelist:
         try:
             sci_image = ccdproc.CCDData.read(ascience, unit='adu')
-            exp_time = fits.getval(ascience, 'exptime')
-            darkmaster = chooseClosestDark(darklists, exp_time)
-            sci_darksub = ccdproc.subtract_dark(sci_image, darkmaster, \
-                exposure_time='exptime', exposure_unit=u.second)
-            sci_flatcorrected = ccdproc.flat_correct(sci_darksub, flatmaster)
+            if args.usebias:
+                sci_biassub = ccdproc.subtract_bias(sci_image, biasmaster)
+                sci_flatcorrected = ccdproc.flat_correct(sci_biassub, flatmaster)
+            else:
+                exp_time = fits.getval(ascience, 'exptime')
+                darkmaster = chooseClosestDark(darklists, exp_time)
+                sci_darksub = ccdproc.subtract_dark(sci_image, darkmaster, \
+                    exposure_time='exptime', exposure_unit=u.second)
+                sci_flatcorrected = ccdproc.flat_correct(sci_darksub, flatmaster)
         except:
             logger.error("Couldn't reduce image %s." % (ascience))
             continue
