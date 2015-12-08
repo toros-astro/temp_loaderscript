@@ -46,8 +46,8 @@ def combineBias(biaslist):
     """Combine all the bias files into a master bias"""
     ccdlist = [ccdproc.CCDData.read(abias, unit="adu") for abias in biaslist]
     biasComb = ccdproc.Combiner(ccdlist)
-    biasComb.sigma_clipping(low_thresh=3, high_thresh=3, func=np.ma.median)
-    biasmaster = biasComb.average_combine()
+    #biasComb.sigma_clipping(low_thresh=3, high_thresh=3, func=np.ma.median)
+    biasmaster = biasComb.median_combine()
     return biasmaster
 
 
@@ -55,8 +55,8 @@ def combineDarks(darklist):
     """Combine all the dark files into a master dark"""
     darkComb = ccdproc.Combiner([ccdproc.CCDData.read(adark, unit="adu") \
         for adark in darklist])
-    darkComb.sigma_clipping(low_thresh=3, high_thresh=3, func=np.ma.median)
-    darkmaster = darkComb.average_combine()
+    #darkComb.sigma_clipping(low_thresh=3, high_thresh=3, func=np.ma.median)
+    darkmaster = darkComb.median_combine()
     darkmaster.header['exptime'] = fits.getval(darklist[0], 'exptime')
     return darkmaster
 
@@ -73,9 +73,9 @@ def combineFlats(flatlist, dark=None, bias=None):
         flat_sub = ccdflatlist
 
     flatComb = ccdproc.Combiner(flat_sub)
-    flatComb.sigma_clipping(low_thresh=3, high_thresh=3, func=np.ma.median)
+    #flatComb.sigma_clipping(low_thresh=3, high_thresh=3, func=np.ma.median)
     flatComb.scaling = lambda arr: 1./np.ma.average(arr)
-    flatmaster = flatComb.average_combine()
+    flatmaster = flatComb.median_combine()
     return flatmaster
 
 
@@ -91,6 +91,7 @@ def saveCCDDataAndLog(outpath, calibfile):
 if __name__ == "__main__":
     import sys
     import argparse
+    from astropy.io import fits
 
     parser = argparse.ArgumentParser("Script to preprocess astrononomical images.")
     parser.add_argument("--dir", help="Input the directory to be processed.")
@@ -143,7 +144,7 @@ if __name__ == "__main__":
     keys = ['imagetyp', 'object', 'filter', 'exptime']
     allfits = ImageFileCollection(rawpath, keywords=keys)
 
-    #Collect all dark files and make a dark frame for each diff exposure time
+    #Collect all dark files and make a dark frame for each diff co time
     dark_matches = np.ma.array(['dark' in atype.lower() \
                                    for atype in allfits.summary['imagetyp']])
     darkexp_set = set(allfits.summary['exptime'][dark_matches])
@@ -212,5 +213,18 @@ if __name__ == "__main__":
             continue
         outpath = os.path.join(preprocessedpath, \
                  'preprocessed_' + os.path.basename(ascience))
-        saveCCDDataAndLog(outpath, sci_flatcorrected)
+
+        #deadpixmaskfilename = "../stackImages/deadpix.fits"
+        deadpixmaskfilename = None
+
+        hdu_img = fits.PrimaryHDU(sci_flatcorrected.data, \
+            header=fits.getheader(ascience))
+        if deadpixmaskfilename is not None:
+            hdu_deadpix_mask = fits.ImageHDU(fits.getdata(deadpixmaskfilename), \
+                name='DEAD_PIX_MASK')
+            hdulist = fits.HDUList([hdu_img, hdu_deadpix_mask])
+        else:
+            hdulist = fits.HDUList([hdu_img])
+        hdulist.writeto(outpath, clobber=True)
+
 
